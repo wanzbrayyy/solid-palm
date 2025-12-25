@@ -6,7 +6,7 @@ const formatMovieItem = (item) => {
     const views = movie.viewCount || movie.imdbRatingCount || 0;
     
     let durationString = '';
-    if (movie.duration && movie.duration > 60) {
+    if (movie.duration && movie.duration > 0) {
         const totalMinutes = Math.floor(movie.duration / 60);
         const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
@@ -79,10 +79,9 @@ exports.getHomeData = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Home Critical Error:', error.message);
         res.status(500).json({
             success: false,
-            message: "Gagal memuat data dari semua server.",
+            message: error.message,
             data: []
         });
     }
@@ -93,16 +92,9 @@ exports.searchMovies = async (req, res) => {
         const query = req.query.q || req.params.query;
         if (!query) return res.json({ success: true, data: [] });
 
-        const payload = {
-            keyword: query,
-            page: 1,
-            perPage: 30,
-            subjectType: 0
-        };
-
         const response = await makeApiRequest('/wefeed-h5-bff/web/subject/search', {
             method: 'POST',
-            data: payload
+            data: { keyword: query, page: 1, perPage: 30, subjectType: 0 }
         });
 
         const items = response.data?.data?.items || [];
@@ -112,7 +104,6 @@ exports.searchMovies = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Search Error:', error.message);
         res.status(500).json({ success: false, data: [] });
     }
 };
@@ -120,6 +111,8 @@ exports.searchMovies = async (req, res) => {
 exports.getVideoDetail = async (req, res) => {
     try {
         const { id } = req.params;
+        const season = parseInt(req.query.season) || 0;
+        const episode = parseInt(req.query.episode) || 0;
 
         const infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', {
             params: { subjectId: id }
@@ -127,60 +120,58 @@ exports.getVideoDetail = async (req, res) => {
         const subject = infoResponse.data?.data?.subject;
 
         if (!subject) throw new Error("Video not found");
+        
+        // Pilih episode yang aktif, default ke episode pertama jika tidak ada query
+        const isSeries = subject.subjectType === 2;
+        let activeSeason = season;
+        let activeEpisode = episode;
+        
+        if(isSeries && season === 0 && episode === 0 && subject.episodeGroups?.[0]?.episodeList?.[0]){
+            activeSeason = subject.episodeGroups[0].season;
+            activeEpisode = subject.episodeGroups[0].episodeList[0].episode;
+        }
 
         const detailPath = subject.detailPath;
         let sources = [];
-        let finalVideoUrl = null;
-
         if (detailPath) {
             const refererUrl = `https://fmoviesunblocked.net/spa/videoPlayPage/movies/${detailPath}?id=${id}&type=/movie/detail`;
             try {
                 const sourceResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/download', {
-                    params: { subjectId: id, se: 0, ep: 0 },
+                    params: { subjectId: id, se: activeSeason, ep: activeEpisode },
                     headers: { 'Referer': refererUrl, 'Origin': 'https://fmoviesunblocked.net' }
                 });
-
                 const downloads = sourceResponse.data?.data?.downloads || [];
                 sources = downloads.map(file => ({
                     quality: file.resolution || 'Original',
                     videoUrl: `${req.protocol}://${req.get('host')}/api/download/${encodeURIComponent(file.url)}`,
                     size: file.size ? `${(file.size / 1024 / 1024).toFixed(0)} MB` : ''
                 }));
-
-                if (sources.length > 0) {
-                    finalVideoUrl = sources.sort((a, b) => parseInt(b.quality) - parseInt(a.quality))[0].videoUrl;
-                }
             } catch (err) {
                 console.error("Source Fetch Error:", err.message);
             }
         }
         
-        let relatedMovies = [];
-        if (infoResponse.data?.data?.recommendList?.length > 0) {
-            relatedMovies = infoResponse.data.data.recommendList.map(formatMovieItem);
-        }
-
         const movieData = {
             videoId: subject.id,
             title: subject.title,
             description: subject.intro || 'No description available.',
             cover: subject.cover?.url || subject.stills?.url,
-            videoUrl: finalVideoUrl,
+            videoUrl: sources.length > 0 ? sources.sort((a, b) => parseInt(b.quality) - parseInt(a.quality))[0].videoUrl : null,
             sources: sources,
             views: subject.viewCount ? `${(subject.viewCount / 1000).toFixed(1)}K` : '0',
             duration: subject.duration ? `${Math.floor(subject.duration / 60)} min` : '',
             tags: subject.tagList ? subject.tagList.map(t => t.name) : [],
-            author: { name: "Wanzofc Film", avatar: "https://i.ibb.co/27ymgy5Z/abmoviev1.jpg" }
+            author: { name: "Wanzofc Film", avatar: "https://i.ibb.co/27ymgy5Z/abmoviev1.jpg" },
+            // Kirim data season dan episode
+            type: subject.subjectType === 1 ? 'Movie' : 'Series',
+            episodeGroups: subject.episodeGroups || [],
+            activeSeason: activeSeason,
+            activeEpisode: activeEpisode,
         };
 
-        res.json({ 
-            success: true, 
-            data: movieData,
-            related: relatedMovies
-        });
+        res.json({ success: true, data: movieData });
 
     } catch (error) {
-        console.error('Detail Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -190,34 +181,27 @@ exports.proxyDownload = async (req, res) => {
         const targetUrl = decodeURIComponent(req.params[0]);
         if (!targetUrl) return res.status(400).send("Invalid URL");
 
-        const headers = {
-            'User-Agent': 'okhttp/4.12.0',
-            'Referer': 'https://fmoviesunblocked.net/',
-        };
-        if (req.headers.range) {
-            headers['Range'] = req.headers.range;
-        }
-
         const response = await axios({
             method: 'GET',
             url: targetUrl,
             responseType: 'stream',
-            headers: headers
+            headers: {
+                'User-Agent': 'okhttp/4.12.0',
+                'Referer': 'https://fmoviesunblocked.net/',
+                'Range': req.headers.range || ''
+            }
         });
-
         const head = {
             'Content-Type': response.headers['content-type'],
             'Content-Length': response.headers['content-length'],
             'Accept-Ranges': 'bytes'
         };
-        
         if (response.status === 206) {
             head['Content-Range'] = response.headers['content-range'];
             res.writeHead(206, head);
         } else {
             res.writeHead(200, head);
         }
-
         response.data.pipe(res);
     } catch (error) {
         if (!res.headersSent) res.status(500).send("Stream Error");
