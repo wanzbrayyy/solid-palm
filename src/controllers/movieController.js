@@ -1,83 +1,97 @@
 const { makeApiRequest } = require('../utils/movieboxClient');
 const axios = require('axios');
 
-// HELPER BARU: Menyesuaikan format data MovieBox V2 ke format Frontend
+// HELPER BARU: Membersihkan data dan menghilangkan "N/A"
 const formatMovieItem = (item) => {
-    // Menangani item dari banner, topPick, homeList, dan subjectList
     const movie = item.subject || item;
+    const views = movie.viewCount || movie.imdbRatingCount || 0;
     
+    // Konversi durasi dari detik ke format "jam menit" jika tersedia
+    let durationString = 'N/A';
+    if (movie.duration && movie.duration > 0) {
+        const totalMinutes = Math.floor(movie.duration / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        if (hours > 0) {
+            durationString = `${hours}h ${minutes}m`;
+        } else {
+            durationString = `${minutes}m`;
+        }
+    }
+
     return {
-        // Gunakan subjectId jika ada, jika tidak pakai id biasa
         videoId: movie.subjectId || movie.id,
-        title: movie.title,
+        title: movie.title || 'Untitled',
         cover: movie.cover?.url || movie.stills?.url || 'https://i.ibb.co/6Hwz2p6/placeholder.png',
-        videoUrl: null, 
-        views: movie.viewCount ? `${(movie.viewCount / 1000).toFixed(1)}K` : (movie.imdbRatingCount ? `${(movie.imdbRatingCount / 1000).toFixed(1)}K` : '0'),
-        duration: movie.duration > 60 ? `${Math.floor(movie.duration / 60)} min` : (movie.duration || 'N/A'),
-        type: movie.subjectType === 1 ? 'movie' : 'series'
+        views: views > 1000 ? `${(views / 1000).toFixed(1)}K` : String(views),
+        duration: durationString,
+        type: movie.subjectType === 1 ? 'Movie' : 'Series'
     };
 };
 
-// CONTROLLER UTAMA
+// CONTROLLER BARU: Lebih Cerdas dan Dinamis
 exports.getHomeData = async (req, res) => {
     try {
         const response = await makeApiRequest('/wefeed-h5-bff/web/home');
         const rawData = response.data?.data || {};
 
-        let trending = [];
-        let recommended = [];
+        const homeSections = [];
 
-        // 1. Ambil dari Banner (Gambar Besar di Atas)
+        // 1. Ambil Banner sebagai "Trending"
         if (rawData.operatingList) {
             const bannerModule = rawData.operatingList.find(op => op.type === "BANNER");
-            if (bannerModule && bannerModule.banner && bannerModule.banner.items) {
-                trending = bannerModule.banner.items.map(formatMovieItem);
+            if (bannerModule?.banner?.items) {
+                homeSections.push({
+                    title: "Sedang Populer",
+                    items: bannerModule.banner.items.map(formatMovieItem)
+                });
+            }
+        }
+
+        // 2. Ekstrak Semua Modul dari "homeList"
+        if (rawData.homeList && rawData.homeList.length > 0) {
+            rawData.homeList.forEach(module => {
+                // Pastikan modul punya nama dan punya film di dalamnya
+                if (module.title && module.subjects && module.subjects.length > 0) {
+                    homeSections.push({
+                        title: module.title,
+                        items: module.subjects.map(formatMovieItem)
+                    });
+                }
+            });
+        }
+        
+        // 3. Fallback: Jika tidak ada modul sama sekali, panggil API Trending manual
+        if (homeSections.length < 2) {
+            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { 
+                params: { page: 0, perPage: 20 } 
+            });
+            if (trendRes.data?.data?.subjectList) {
+                homeSections.push({
+                    title: "Baru Ditambahkan",
+                    items: trendRes.data.data.subjectList.map(formatMovieItem)
+                });
             }
         }
         
-        // 2. Ambil dari 'homeList' atau 'topPickList' jika ada
-        if (rawData.homeList && rawData.homeList.length > 0) {
-            recommended.push(...rawData.homeList.map(formatMovieItem));
-        }
-        if (rawData.topPickList && rawData.topPickList.length > 0) {
-            recommended.push(...rawData.topPickList.map(formatMovieItem));
-        }
-
-        // 3. Fallback jika 'trending' masih kosong, ambil dari API Trending manual
-        if (trending.length === 0) {
-            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { 
-                params: { page: 0, perPage: 15 } 
-            });
-            
-            if (trendRes.data?.data?.subjectList) {
-                const trendSubjects = trendRes.data.data.subjectList;
-                trending = trendSubjects.map(formatMovieItem);
-            }
-        }
-
-        // Jika recommended kosong, isi dengan sisa trending
-        if (recommended.length === 0 && trending.length > 5) {
-            recommended = trending.slice(5);
-        }
-
+        // Response format baru yang lebih dinamis
         res.json({
             success: true,
-            data: {
-                trending: trending.slice(0, 10),
-                // 'anime' tidak ada di response baru, jadi kita kosongkan atau isi dari rekomendasi
-                anime: [], 
-                recommended: recommended.slice(0, 20)
-            }
+            // 'data' sekarang berisi array of sections, bukan object statis
+            data: homeSections 
         });
 
     } catch (error) {
+        console.error('Home Critical Error:', error.message);
         res.status(500).json({
             success: false,
-            message: error.message,
-            data: { trending: [], anime: [], recommended: [] }
+            message: "Gagal memuat data dari semua server.",
+            data: [] // Return array kosong
         });
     }
 };
+
+// Controller lain (Search, Detail, Proxy) tetap sama karena sudah cukup baik
 
 exports.searchMovies = async (req, res) => {
     try {
@@ -134,7 +148,7 @@ exports.getVideoDetail = async (req, res) => {
                 sources = downloads.map(file => ({
                     quality: file.resolution || 'Original',
                     videoUrl: `${req.protocol}://${req.get('host')}/api/download/${encodeURIComponent(file.url)}`,
-                    size: file.size
+                    size: file.size ? `${(file.size / 1024 / 1024).toFixed(0)} MB` : ''
                 }));
 
                 if (sources.length > 0) {
@@ -148,14 +162,14 @@ exports.getVideoDetail = async (req, res) => {
         const movieData = {
             videoId: subject.id,
             title: subject.title,
-            description: subject.intro,
+            description: subject.intro || 'No description available.',
             cover: subject.cover?.url || subject.stills?.url,
             videoUrl: finalVideoUrl,
             sources: sources,
-            views: subject.viewCount ? `${(subject.viewCount / 1000).toFixed(1)}K` : 'N/A',
-            duration: subject.duration || 'N/A',
+            views: subject.viewCount ? `${(subject.viewCount / 1000).toFixed(1)}K` : '0',
+            duration: subject.duration || '',
             tags: subject.tagList ? subject.tagList.map(t => t.name) : [],
-            author: { name: "MovieBox", avatar: "https://i.ibb.co/27ymgy5Z/abmoviev1.jpg" }
+            author: { name: "Wanzofc", avatar: "https://i.ibb.co/27ymgy5Z/abmoviev1.jpg" }
         };
 
         res.json({ success: true, data: movieData });

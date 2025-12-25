@@ -1,16 +1,24 @@
 const { makeApiRequest } = require('../utils/movieboxClient');
 const axios = require('axios');
 
-const formatMovieItem = (item) => ({
-    videoId: item.id || item.subjectId,
-    title: item.title,
-    cover: item.cover?.url || item.stills?.url || 'https://i.ibb.co/6Hwz2p6/placeholder.png',
-    videoUrl: null,
-    views: item.viewCount ? `${(item.viewCount / 1000).toFixed(1)}K` : '0',
-    duration: item.duration || 'N/A',
-    type: item.domainType === 1 ? 'movie' : 'series'
-});
+// HELPER BARU: Menyesuaikan format data MovieBox V2 ke format Frontend
+const formatMovieItem = (item) => {
+    // Menangani item dari banner, topPick, homeList, dan subjectList
+    const movie = item.subject || item;
+    
+    return {
+        // Gunakan subjectId jika ada, jika tidak pakai id biasa
+        videoId: movie.subjectId || movie.id,
+        title: movie.title,
+        cover: movie.cover?.url || movie.stills?.url || 'https://i.ibb.co/6Hwz2p6/placeholder.png',
+        videoUrl: null, 
+        views: movie.viewCount ? `${(movie.viewCount / 1000).toFixed(1)}K` : (movie.imdbRatingCount ? `${(movie.imdbRatingCount / 1000).toFixed(1)}K` : '0'),
+        duration: movie.duration > 60 ? `${Math.floor(movie.duration / 60)} min` : (movie.duration || 'N/A'),
+        type: movie.subjectType === 1 ? 'movie' : 'series'
+    };
+};
 
+// CONTROLLER UTAMA
 exports.getHomeData = async (req, res) => {
     try {
         const response = await makeApiRequest('/wefeed-h5-bff/web/home');
@@ -18,37 +26,46 @@ exports.getHomeData = async (req, res) => {
 
         let trending = [];
         let recommended = [];
-        let anime = [];
 
-        if (rawData.modules) {
-            rawData.modules.forEach(mod => {
-                if (mod.items && mod.items.length > 0) {
-                    const formattedItems = mod.items.map(formatMovieItem);
-                    if (mod.moduleName === 'Trending' || mod.moduleId === 1) {
-                        trending = formattedItems;
-                    } else if (mod.moduleName?.includes('Anime') || mod.moduleId === 3) {
-                        anime = formattedItems;
-                    } else {
-                        recommended.push(...formattedItems);
-                    }
-                }
-            });
+        // 1. Ambil dari Banner (Gambar Besar di Atas)
+        if (rawData.operatingList) {
+            const bannerModule = rawData.operatingList.find(op => op.type === "BANNER");
+            if (bannerModule && bannerModule.banner && bannerModule.banner.items) {
+                trending = bannerModule.banner.items.map(formatMovieItem);
+            }
+        }
+        
+        // 2. Ambil dari 'homeList' atau 'topPickList' jika ada
+        if (rawData.homeList && rawData.homeList.length > 0) {
+            recommended.push(...rawData.homeList.map(formatMovieItem));
+        }
+        if (rawData.topPickList && rawData.topPickList.length > 0) {
+            recommended.push(...rawData.topPickList.map(formatMovieItem));
         }
 
+        // 3. Fallback jika 'trending' masih kosong, ambil dari API Trending manual
         if (trending.length === 0) {
-            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', {
-                params: { page: 0, perPage: 15 }
+            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { 
+                params: { page: 0, perPage: 15 } 
             });
-            if (trendRes.data?.data?.items) {
-                trending = trendRes.data.data.items.map(formatMovieItem);
+            
+            if (trendRes.data?.data?.subjectList) {
+                const trendSubjects = trendRes.data.data.subjectList;
+                trending = trendSubjects.map(formatMovieItem);
             }
+        }
+
+        // Jika recommended kosong, isi dengan sisa trending
+        if (recommended.length === 0 && trending.length > 5) {
+            recommended = trending.slice(5);
         }
 
         res.json({
             success: true,
             data: {
                 trending: trending.slice(0, 10),
-                anime: anime.slice(0, 10),
+                // 'anime' tidak ada di response baru, jadi kita kosongkan atau isi dari rekomendasi
+                anime: [], 
                 recommended: recommended.slice(0, 20)
             }
         });
@@ -124,7 +141,7 @@ exports.getVideoDetail = async (req, res) => {
                     finalVideoUrl = sources[sources.length - 1].videoUrl;
                 }
             } catch (err) {
-                // Ignore source fetch errors
+                // Ignore source error
             }
         }
 
