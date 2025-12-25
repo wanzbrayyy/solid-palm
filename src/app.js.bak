@@ -1,47 +1,43 @@
 const express = require('express');
 const cors = require('cors');
-const connectDB = require('./config/db');
+const connectDB = require('./config/db'); // Import fungsi connect baru
 const movieRoutes = require('./routes/movieRoutes');
 
 const app = express();
-connectDB();
+
+// PENTING: Middleware agar Vercel tidak memblokir request Frontend
 app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// 3. Routing
+// PENTING: Panggil koneksi DB di setiap request (karena ini Serverless)
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("Database Error:", error);
+    res.status(500).json({ success: false, error: "Database Connection Failed" });
+  }
+});
+
 app.use('/api', movieRoutes);
 
-// 4. Root Endpoint (Untuk Cek Server Hidup/Mati)
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'success', 
-    message: 'Server Wanzofc Film Berjalan!',
-    timestamp: new Date()
-  });
+  res.json({ status: "Online", message: "Wanzofc Server Ready" });
 });
 
-// 5. Error Handling Terakhir
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ 
-    success: false, 
-    message: 'Terjadi kesalahan di server',
-    error: err.message 
-  });
-});
+// Export app (Wajib untuk Vercel)
+module.exports = app;
 
-// 6. Export untuk Vercel & Listen untuk Local
+// Listen (Hanya untuk local)
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
-
-module.exports = app;

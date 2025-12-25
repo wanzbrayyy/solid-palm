@@ -3,15 +3,13 @@ const router = express.Router();
 const { 
   getHomeData, 
   searchMovies, 
-  getVideoDetail,
-  createMovie,
-  seedDatabase // <--- IMPORT INI
+  getVideoDetail, 
+  proxyDownload 
 } = require('../controllers/movieController');
 
 router.get('/home', getHomeData);
 router.get('/search', searchMovies);
-router.get('/seed', seedDatabase); // <--- TAMBAHKAN INI
 router.get('/video/:id', getVideoDetail);
-router.post('/video', createMovie);
+router.get('/download/*', proxyDownload);
 
 module.exports = router;
