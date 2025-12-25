@@ -2,62 +2,65 @@ const axios = require('axios');
 const { wrapper } = require('axios-cookiejar-support');
 const { CookieJar } = require('tough-cookie');
 
-// Konfigurasi Host
-const SELECTED_HOST = "h5.aoneroom.com";
-const HOST_URL = `https://${SELECTED_HOST}`;
+const MIRRORS = [
+    "moviebox.ph",
+    "moviebox.pk",
+    "netnaija.video",
+    "h5.aoneroom.com",
+    "movieboxapp.in"
+];
 
 const DEFAULT_HEADERS = {
-    'X-Client-Info': '{"timezone":"Africa/Nairobi"}',
-    'Accept-Language': 'en-US,en;q=0.5',
+    'X-Client-Info': '{"timezone":"Asia/Jakarta"}',
+    'Accept-Language': 'en-US,en;q=0.9',
     'Accept': 'application/json',
     'User-Agent': 'okhttp/4.12.0',
-    'Referer': HOST_URL,
-    'Host': SELECTED_HOST,
     'Connection': 'keep-alive',
-    'X-Forwarded-For': '1.1.1.1',
-    'CF-Connecting-IP': '1.1.1.1',
-    'X-Real-IP': '1.1.1.1'
+    'X-Forwarded-For': '103.147.15.1',
+    'CF-Connecting-IP': '103.147.15.1',
+    'X-Real-IP': '103.147.15.1'
 };
 
-const jar = new CookieJar();
-const axiosInstance = wrapper(axios.create({
-    jar,
-    withCredentials: true,
-    timeout: 30000
-}));
+async function makeApiRequest(path, options = {}) {
+    let lastError = null;
 
-let cookiesInitialized = false;
-
-// Fungsi inisialisasi Cookies
-async function ensureCookiesAreAssigned() {
-    if (!cookiesInitialized) {
+    for (const host of MIRRORS) {
         try {
-            console.log('Initializing session cookies...');
-            await axiosInstance.get(`${HOST_URL}/wefeed-h5-bff/app/get-latest-app-pkgs?app_name=moviebox`, {
-                headers: DEFAULT_HEADERS
+            const jar = new CookieJar();
+            const client = wrapper(axios.create({
+                jar,
+                withCredentials: true,
+                timeout: 15000
+            }));
+
+            const baseUrl = `https://${host}`;
+            const headers = {
+                ...DEFAULT_HEADERS,
+                'Referer': baseUrl,
+                'Host': host,
+                ...options.headers
+            };
+
+            await client.get(`${baseUrl}/wefeed-h5-bff/app/get-latest-app-pkgs?app_name=moviebox`, { headers });
+
+            const response = await client({
+                url: `${baseUrl}${path}`,
+                method: options.method || 'GET',
+                data: options.data,
+                params: options.params,
+                headers
             });
-            cookiesInitialized = true;
-            console.log('Session cookies initialized');
+
+            if (response.data && response.data.data) {
+                return response;
+            }
+
         } catch (error) {
-            console.error('Cookie Init Error:', error.message);
+            lastError = error;
         }
     }
+
+    throw new Error(`All mirrors failed. Last error: ${lastError?.message}`);
 }
 
-// Fungsi Request Utama
-async function makeApiRequest(url, options = {}) {
-    await ensureCookiesAreAssigned();
-    const config = {
-        url: url,
-        headers: { ...DEFAULT_HEADERS, ...options.headers },
-        withCredentials: true,
-        ...options
-    };
-    return await axiosInstance(config);
-}
-
-module.exports = {
-    makeApiRequest,
-    HOST_URL,
-    DEFAULT_HEADERS
-};
+module.exports = { makeApiRequest };
