@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700;800&display=swap');
+
+:root {
+    --primary: #4e54c8;
+    --secondary: #8f94fb;
+    --bg-light: #f8f9fa;
+    --text-dark: #2d3436;
+    --text-gray: #636e72;
+    --white: #ffffff;
+}
+
+body {
+    font-family: 'Poppins', sans-serif;
+    background-color: var(--white);
+    color: var(--text-dark);
+    overflow-x: hidden;
+}
+
+.text-gradient {
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.bg-gradient-primary {
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+}
+
+.section-title {
+    text-transform: uppercase;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--primary);
+    margin-bottom: 1rem;
+}
+
+.lowercase-text {
+    text-transform: lowercase;
+    color: var(--text-gray);
+    font-weight: 400;
+}
+
+.btn-custom {
+    background: var(--primary);
+    color: white;
+    border-radius: 50px;
+    padding: 12px 35px;
+    font-weight: 600;
+    transition: 0.3s;
+    border: none;
+    box-shadow: 0 5px 15px rgba(78, 84, 200, 0.3);
+}
+
+.btn-custom:hover {
+    transform: scale(1.05);
+    background: var(--secondary);
+    color: white;
+}
