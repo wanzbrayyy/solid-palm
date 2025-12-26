@@ -6,15 +6,11 @@ const formatMovieItem = (item) => {
     const views = movie.viewCount || movie.imdbRatingCount || 0;
     
     let durationString = '';
-    if (movie.duration && movie.duration > 0) {
+    if (movie.duration && movie.duration > 60) {
         const totalMinutes = Math.floor(movie.duration / 60);
         const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
-        if (hours > 0) {
-            durationString = `${hours}h ${minutes}m`;
-        } else {
-            durationString = `${minutes}m`;
-        }
+        durationString = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
     }
 
     return {
@@ -37,59 +33,30 @@ exports.getHomeData = async (req, res) => {
         if (rawData.operatingList) {
             rawData.operatingList.forEach(module => {
                 if (module.type === "BANNER" && module.banner?.items?.length > 0) {
-                    homeSections.push({
-                        title: "Populer Minggu Ini",
-                        items: module.banner.items.map(formatMovieItem)
-                    });
+                    homeSections.push({ title: "Populer Minggu Ini", items: module.banner.items.map(formatMovieItem) });
                 } else if (module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0) {
-                    homeSections.push({
-                        title: module.title,
-                        items: module.subjects.map(formatMovieItem)
-                    });
+                    homeSections.push({ title: module.title, items: module.subjects.map(formatMovieItem) });
                 }
             });
         }
 
-        if (rawData.homeList && rawData.homeList.length > 0) {
-            rawData.homeList.forEach(module => {
-                if (module.title && module.subjects && module.subjects.length > 0) {
-                    homeSections.push({
-                        title: module.title,
-                        items: module.subjects.map(formatMovieItem)
-                    });
-                }
-            });
-        }
-        
         if (homeSections.length === 0) {
-            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { 
-                params: { page: 0, perPage: 20 } 
-            });
+            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { params: { page: 0, perPage: 20 } });
             if (trendRes.data?.data?.subjectList) {
-                homeSections.push({
-                    title: "Baru Ditambahkan",
-                    items: trendRes.data.data.subjectList.map(formatMovieItem)
-                });
+                homeSections.push({ title: "Baru Ditambahkan", items: trendRes.data.data.subjectList.map(formatMovieItem) });
             }
         }
         
-        res.json({
-            success: true,
-            data: homeSections 
-        });
+        res.json({ success: true, data: homeSections });
 
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message,
-            data: []
-        });
+        res.status(500).json({ success: false, message: error.message, data: [] });
     }
 };
 
 exports.searchMovies = async (req, res) => {
     try {
-        const query = req.query.q || req.params.query;
+        const query = req.query.q;
         if (!query) return res.json({ success: true, data: [] });
 
         const response = await makeApiRequest('/wefeed-h5-bff/web/subject/search', {
@@ -98,10 +65,7 @@ exports.searchMovies = async (req, res) => {
         });
 
         const items = response.data?.data?.items || [];
-        res.json({
-            success: true,
-            data: items.map(formatMovieItem)
-        });
+        res.json({ success: true, data: items.map(formatMovieItem) });
 
     } catch (error) {
         res.status(500).json({ success: false, data: [] });
@@ -111,30 +75,26 @@ exports.searchMovies = async (req, res) => {
 exports.getVideoDetail = async (req, res) => {
     try {
         const { id } = req.params;
-        const season = parseInt(req.query.season) || 0;
-        const episode = parseInt(req.query.episode) || 0;
+        const season = parseInt(req.query.season, 10);
+        const episode = parseInt(req.query.episode, 10);
 
-        const infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', {
-            params: { subjectId: id }
-        });
+        const infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: id } });
         const subject = infoResponse.data?.data?.subject;
 
         if (!subject) throw new Error("Video not found");
         
-        // Pilih episode yang aktif, default ke episode pertama jika tidak ada query
         const isSeries = subject.subjectType === 2;
-        let activeSeason = season;
-        let activeEpisode = episode;
+        let activeSeason = isNaN(season) ? 0 : season;
+        let activeEpisode = isNaN(episode) ? 0 : episode;
         
-        if(isSeries && season === 0 && episode === 0 && subject.episodeGroups?.[0]?.episodeList?.[0]){
+        if(isSeries && activeSeason === 0 && activeEpisode === 0 && subject.episodeGroups?.[0]?.episodeList?.[0]){
             activeSeason = subject.episodeGroups[0].season;
             activeEpisode = subject.episodeGroups[0].episodeList[0].episode;
         }
 
-        const detailPath = subject.detailPath;
         let sources = [];
-        if (detailPath) {
-            const refererUrl = `https://fmoviesunblocked.net/spa/videoPlayPage/movies/${detailPath}?id=${id}&type=/movie/detail`;
+        if (subject.detailPath) {
+            const refererUrl = `https://fmoviesunblocked.net/spa/videoPlayPage/movies/${subject.detailPath}?id=${id}&type=/movie/detail`;
             try {
                 const sourceResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/download', {
                     params: { subjectId: id, se: activeSeason, ep: activeEpisode },
@@ -160,18 +120,19 @@ exports.getVideoDetail = async (req, res) => {
             sources: sources,
             views: subject.viewCount ? `${(subject.viewCount / 1000).toFixed(1)}K` : '0',
             duration: subject.duration ? `${Math.floor(subject.duration / 60)} min` : '',
-            tags: subject.tagList ? subject.tagList.map(t => t.name) : [],
+            tags: subject.tagList?.map(t => t.name) || [],
             author: { name: "Wanzofc Film", avatar: "https://i.ibb.co/27ymgy5Z/abmoviev1.jpg" },
-            // Kirim data season dan episode
-            type: subject.subjectType === 1 ? 'Movie' : 'Series',
+            type: isSeries ? 'Series' : 'Movie',
             episodeGroups: subject.episodeGroups || [],
             activeSeason: activeSeason,
             activeEpisode: activeEpisode,
         };
 
-        res.json({ success: true, data: movieData });
+        const related = infoResponse.data?.data?.recommendList?.map(formatMovieItem) || [];
+        res.json({ success: true, data: movieData, related });
 
     } catch (error) {
+        console.error('Detail Error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -188,20 +149,23 @@ exports.proxyDownload = async (req, res) => {
             headers: {
                 'User-Agent': 'okhttp/4.12.0',
                 'Referer': 'https://fmoviesunblocked.net/',
-                'Range': req.headers.range || ''
+                'Range': req.headers.range
             }
         });
+
         const head = {
             'Content-Type': response.headers['content-type'],
             'Content-Length': response.headers['content-length'],
             'Accept-Ranges': 'bytes'
         };
+        
         if (response.status === 206) {
             head['Content-Range'] = response.headers['content-range'];
             res.writeHead(206, head);
         } else {
             res.writeHead(200, head);
         }
+
         response.data.pipe(res);
     } catch (error) {
         if (!res.headersSent) res.status(500).send("Stream Error");
