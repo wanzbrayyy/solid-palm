@@ -1,0 +1,47 @@
+.featureCard {
+  background-color: #fff;
+  padding: 30px;
+  border-radius: 15px;
+  box-shadow: var(--shadow-light);
+  text-align: center;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.featureCard:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+}
+
+.iconWrapper {
+  background: var(--gradient-blue);
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px auto;
+  box-shadow: 0 4px 8px rgba(0, 114, 255, 0.2);
+}
+
+.icon {
+  color: #fff;
+  font-size: 2.2rem;
+}
+
+.featureCard h3 {
+  font-size: 1.4rem;
+  margin-bottom: 10px;
+  color: var(--text-color);
+}
+
+.featureCard p {
+  font-size: 0.95rem;
+  color: var(--secondary-color);
+  line-height: 1.5;
+}
