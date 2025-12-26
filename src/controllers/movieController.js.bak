@@ -24,53 +24,23 @@ const formatMovieItem = (item) => {
     };
 };
 
-// --- CONTROLLER BARU DENGAN FALLBACK DAN LOGIC LEBIH BANYAK ---
-
 exports.getHomeData = async (req, res) => {
     try {
+        const response = await makeApiRequest('/wefeed-h5-bff/web/home');
+        const rawData = response.data?.data || {};
         const homeSections = [];
 
-        // Prioritas 1: Coba ambil dari Endpoint Home Utama
-        try {
-            const response = await makeApiRequest('/wefeed-h5-bff/web/home');
-            const rawData = response.data?.data || {};
-
-            if (rawData.operatingList) {
-                rawData.operatingList.forEach(module => {
-                    const hasBanner = module.type === "BANNER" && module.banner?.items?.length > 0;
-                    const hasSubjects = module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0;
-                    
-                    if (hasBanner) {
-                        homeSections.push({ title: "Populer Minggu Ini", items: module.banner.items.map(formatMovieItem).filter(Boolean) });
-                    } else if (hasSubjects) {
-                        homeSections.push({ title: module.title, items: module.subjects.map(formatMovieItem).filter(Boolean) });
-                    }
-                });
-            }
-        } catch (homeError) {
-            console.warn("Home API utama gagal, mencoba fallback...", homeError.message);
-        }
-
-        // Prioritas 2 (Fallback): Jika Home utama gagal atau kosong, ambil dari Trending
-        if (homeSections.length < 2) {
-            try {
-                const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { 
-                    params: { page: 0, perPage: 40 } 
-                });
-                if (trendRes.data?.data?.subjectList) {
-                    const trendingItems = trendRes.data.data.subjectList.map(formatMovieItem).filter(Boolean);
-                    homeSections.push({ title: "Lagi Trending", items: trendingItems.slice(0, 20) });
-                    homeSections.push({ title: "Rekomendasi", items: trendingItems.slice(20) });
+        if (rawData.operatingList) {
+            rawData.operatingList.forEach(module => {
+                if (module.type === "BANNER" && module.banner?.items?.length > 0) {
+                    homeSections.push({ title: "Populer Minggu Ini", items: module.banner.items.map(formatMovieItem).filter(Boolean) });
+                } else if (module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0) {
+                    homeSections.push({ title: module.title, items: module.subjects.map(formatMovieItem).filter(Boolean) });
                 }
-            } catch (trendError) {
-                 console.error('Semua API Homepage gagal:', trendError.message);
-            }
+            });
         }
         
-        res.json({
-            success: true,
-            data: homeSections 
-        });
+        res.json({ success: true, data: homeSections });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message, data: [] });
@@ -95,44 +65,34 @@ exports.searchMovies = async (req, res) => {
     }
 };
 
+// --- PERBAIKAN UTAMA DI SINI ---
 exports.getVideoDetail = async (req, res) => {
     try {
         const { id } = req.params;
         const season = parseInt(req.query.season, 10);
         const episode = parseInt(req.query.episode, 10);
 
-        // API MovieBox terkadang tidak stabil. Kita coba beberapa kali.
-        let infoResponse;
-        try {
-            infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: id } });
-        } catch (detailError) {
-             // Fallback: Jika detail gagal, coba cari filmnya dan ambil info dari sana
-            if (detailError.response?.status === 404) {
-                const searchResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/search', {
-                    method: 'POST',
-                    data: { keyword: id, page: 1, perPage: 1, subjectType: 0 }
-                });
-                const item = searchResponse.data?.data?.items?.[0];
-                if (item) {
-                     infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: item.id } });
-                } else {
-                    throw new Error("Video not found via search fallback");
-                }
-            } else {
-                throw detailError;
-            }
-        }
-
+        const infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: id } });
         const subject = infoResponse.data?.data?.subject;
-        if (!subject) throw new Error("Subject data not found in response");
+
+        if (!subject) throw new Error("Video not found");
         
         const isSeries = subject.subjectType === 2;
-        let activeSeason = isNaN(season) ? 0 : season;
-        let activeEpisode = isNaN(episode) ? 0 : episode;
+        let activeSeason = season;
+        let activeEpisode = episode;
         
-        if(isSeries && activeSeason === 0 && activeEpisode === 0 && subject.episodeGroups?.[0]?.episodeList?.[0]){
-            activeSeason = subject.episodeGroups[0].season;
-            activeEpisode = subject.episodeGroups[0].episodeList[0].episode;
+        // LOGIC BARU: Jika Series dan tidak ada query, otomatis pilih S1:E1
+        if (isSeries && (isNaN(season) || isNaN(episode))) {
+            if (subject.episodeGroups?.[0]?.episodeList?.[0]) {
+                activeSeason = subject.episodeGroups[0].season;
+                activeEpisode = subject.episodeGroups[0].episodeList[0].episode;
+            } else {
+                activeSeason = 1; // Default jika API tidak memberikan info grup
+                activeEpisode = 1;
+            }
+        } else if (!isSeries) {
+            activeSeason = 0; // Movie selalu pakai S0 E0
+            activeEpisode = 0;
         }
 
         let sources = [];
@@ -150,7 +110,7 @@ exports.getVideoDetail = async (req, res) => {
                     size: file.size ? `${(file.size / 1024 / 1024).toFixed(0)} MB` : ''
                 }));
             } catch (err) {
-                console.error("Source Fetch Error for ID", id, ":", err.message);
+                console.error(`Source Fetch Error for S${activeSeason}E${activeEpisode}:`, err.message);
             }
         }
         
@@ -175,8 +135,7 @@ exports.getVideoDetail = async (req, res) => {
         res.json({ success: true, data: movieData, related });
 
     } catch (error) {
-        console.error('Detail Critical Error:', error.message);
-        res.status(500).json({ success: false, error: "Gagal mengambil detail film." });
+        res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -195,6 +154,7 @@ exports.proxyDownload = async (req, res) => {
                 'Range': req.headers.range
             }
         });
+
         const head = {
             'Content-Type': response.headers['content-type'],
             'Content-Length': response.headers['content-length'],

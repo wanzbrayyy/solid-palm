@@ -32,16 +32,24 @@ exports.getHomeData = async (req, res) => {
 
         if (rawData.operatingList) {
             rawData.operatingList.forEach(module => {
-                if (module.type === "BANNER" && module.banner?.items?.length > 0) {
+                const hasBanner = module.type === "BANNER" && module.banner?.items?.length > 0;
+                const hasSubjects = module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0;
+                if (hasBanner) {
                     homeSections.push({ title: "Populer Minggu Ini", items: module.banner.items.map(formatMovieItem).filter(Boolean) });
-                } else if (module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0) {
+                } else if (hasSubjects) {
                     homeSections.push({ title: module.title, items: module.subjects.map(formatMovieItem).filter(Boolean) });
                 }
             });
         }
         
+        if (homeSections.length < 2) {
+             const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { params: { page: 0, perPage: 20 } });
+            if (trendRes.data?.data?.subjectList) {
+                homeSections.push({ title: "Lagi Trending", items: trendRes.data.data.subjectList.map(formatMovieItem).filter(Boolean) });
+            }
+        }
+        
         res.json({ success: true, data: homeSections });
-
     } catch (error) {
         res.status(500).json({ success: false, message: error.message, data: [] });
     }
@@ -65,7 +73,6 @@ exports.searchMovies = async (req, res) => {
     }
 };
 
-// --- PERBAIKAN UTAMA DI SINI ---
 exports.getVideoDetail = async (req, res) => {
     try {
         const { id } = req.params;
@@ -78,20 +85,14 @@ exports.getVideoDetail = async (req, res) => {
         if (!subject) throw new Error("Video not found");
         
         const isSeries = subject.subjectType === 2;
-        let activeSeason = season;
-        let activeEpisode = episode;
+        let activeSeason = isNaN(season) ? 0 : season;
+        let activeEpisode = isNaN(episode) ? 0 : episode;
         
-        // LOGIC BARU: Jika Series dan tidak ada query, otomatis pilih S1:E1
-        if (isSeries && (isNaN(season) || isNaN(episode))) {
-            if (subject.episodeGroups?.[0]?.episodeList?.[0]) {
-                activeSeason = subject.episodeGroups[0].season;
-                activeEpisode = subject.episodeGroups[0].episodeList[0].episode;
-            } else {
-                activeSeason = 1; // Default jika API tidak memberikan info grup
-                activeEpisode = 1;
-            }
+        if(isSeries && (isNaN(season) || isNaN(episode)) && subject.episodeGroups?.[0]?.episodeList?.[0]){
+            activeSeason = subject.episodeGroups[0].season;
+            activeEpisode = subject.episodeGroups[0].episodeList[0].episode;
         } else if (!isSeries) {
-            activeSeason = 0; // Movie selalu pakai S0 E0
+            activeSeason = 0;
             activeEpisode = 0;
         }
 
@@ -105,12 +106,12 @@ exports.getVideoDetail = async (req, res) => {
                 });
                 const downloads = sourceResponse.data?.data?.downloads || [];
                 sources = downloads.map(file => ({
-                    quality: file.resolution ? `${file.resolution}p` : 'SD',
+                    quality: file.resolution || 'SD',
                     videoUrl: `${req.protocol}://${req.get('host')}/api/download/${encodeURIComponent(file.url)}`,
                     size: file.size ? `${(file.size / 1024 / 1024).toFixed(0)} MB` : ''
-                }));
+                })).sort((a, b) => parseInt(b.quality) - parseInt(a.quality));
             } catch (err) {
-                console.error(`Source Fetch Error for S${activeSeason}E${activeEpisode}:`, err.message);
+                 // Tetap lanjutkan meskipun source gagal, agar info film tetap tampil
             }
         }
         
@@ -119,7 +120,7 @@ exports.getVideoDetail = async (req, res) => {
             title: subject.title,
             description: subject.description || 'No description available.',
             cover: subject.cover?.url || subject.stills?.url,
-            videoUrl: sources.length > 0 ? sources.sort((a, b) => parseInt(b.quality) - parseInt(a.quality))[0].videoUrl : null,
+            videoUrl: sources.length > 0 ? sources[0].videoUrl : null,
             sources: sources,
             views: subject.imdbRatingCount ? `${(subject.imdbRatingCount / 1000).toFixed(1)}K` : '0',
             duration: subject.duration ? `${Math.floor(subject.duration / 60)} min` : '',
@@ -154,14 +155,8 @@ exports.proxyDownload = async (req, res) => {
                 'Range': req.headers.range
             }
         });
-
-        const head = {
-            'Content-Type': response.headers['content-type'],
-            'Content-Length': response.headers['content-length'],
-            'Accept-Ranges': 'bytes'
-        };
         
-        res.writeHead(response.status, head);
+        res.writeHead(response.status, response.headers);
         response.data.pipe(res);
     } catch (error) {
         if (!res.headersSent) res.status(500).send("Stream Error");
