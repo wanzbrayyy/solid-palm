@@ -2,11 +2,12 @@ const { makeApiRequest } = require('../utils/movieboxClient');
 const axios = require('axios');
 
 const formatMovieItem = (item) => {
+    if (!item) return null;
     const movie = item.subject || item;
     const views = movie.viewCount || movie.imdbRatingCount || 0;
     
     let durationString = '';
-    if (movie.duration && movie.duration > 60) {
+    if (movie.duration && movie.duration > 0) {
         const totalMinutes = Math.floor(movie.duration / 60);
         const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
@@ -23,31 +24,53 @@ const formatMovieItem = (item) => {
     };
 };
 
+// --- CONTROLLER BARU DENGAN FALLBACK DAN LOGIC LEBIH BANYAK ---
+
 exports.getHomeData = async (req, res) => {
     try {
-        const response = await makeApiRequest('/wefeed-h5-bff/web/home');
-        const rawData = response.data?.data || {};
-
         const homeSections = [];
 
-        if (rawData.operatingList) {
-            rawData.operatingList.forEach(module => {
-                if (module.type === "BANNER" && module.banner?.items?.length > 0) {
-                    homeSections.push({ title: "Populer Minggu Ini", items: module.banner.items.map(formatMovieItem) });
-                } else if (module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0) {
-                    homeSections.push({ title: module.title, items: module.subjects.map(formatMovieItem) });
-                }
-            });
+        // Prioritas 1: Coba ambil dari Endpoint Home Utama
+        try {
+            const response = await makeApiRequest('/wefeed-h5-bff/web/home');
+            const rawData = response.data?.data || {};
+
+            if (rawData.operatingList) {
+                rawData.operatingList.forEach(module => {
+                    const hasBanner = module.type === "BANNER" && module.banner?.items?.length > 0;
+                    const hasSubjects = module.type === "SUBJECTS_MOVIE" && module.subjects?.length > 0;
+                    
+                    if (hasBanner) {
+                        homeSections.push({ title: "Populer Minggu Ini", items: module.banner.items.map(formatMovieItem).filter(Boolean) });
+                    } else if (hasSubjects) {
+                        homeSections.push({ title: module.title, items: module.subjects.map(formatMovieItem).filter(Boolean) });
+                    }
+                });
+            }
+        } catch (homeError) {
+            console.warn("Home API utama gagal, mencoba fallback...", homeError.message);
         }
 
-        if (homeSections.length === 0) {
-            const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { params: { page: 0, perPage: 20 } });
-            if (trendRes.data?.data?.subjectList) {
-                homeSections.push({ title: "Baru Ditambahkan", items: trendRes.data.data.subjectList.map(formatMovieItem) });
+        // Prioritas 2 (Fallback): Jika Home utama gagal atau kosong, ambil dari Trending
+        if (homeSections.length < 2) {
+            try {
+                const trendRes = await makeApiRequest('/wefeed-h5-bff/web/subject/trending', { 
+                    params: { page: 0, perPage: 40 } 
+                });
+                if (trendRes.data?.data?.subjectList) {
+                    const trendingItems = trendRes.data.data.subjectList.map(formatMovieItem).filter(Boolean);
+                    homeSections.push({ title: "Lagi Trending", items: trendingItems.slice(0, 20) });
+                    homeSections.push({ title: "Rekomendasi", items: trendingItems.slice(20) });
+                }
+            } catch (trendError) {
+                 console.error('Semua API Homepage gagal:', trendError.message);
             }
         }
         
-        res.json({ success: true, data: homeSections });
+        res.json({
+            success: true,
+            data: homeSections 
+        });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message, data: [] });
@@ -65,7 +88,7 @@ exports.searchMovies = async (req, res) => {
         });
 
         const items = response.data?.data?.items || [];
-        res.json({ success: true, data: items.map(formatMovieItem) });
+        res.json({ success: true, data: items.map(formatMovieItem).filter(Boolean) });
 
     } catch (error) {
         res.status(500).json({ success: false, data: [] });
@@ -78,10 +101,30 @@ exports.getVideoDetail = async (req, res) => {
         const season = parseInt(req.query.season, 10);
         const episode = parseInt(req.query.episode, 10);
 
-        const infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: id } });
-        const subject = infoResponse.data?.data?.subject;
+        // API MovieBox terkadang tidak stabil. Kita coba beberapa kali.
+        let infoResponse;
+        try {
+            infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: id } });
+        } catch (detailError) {
+             // Fallback: Jika detail gagal, coba cari filmnya dan ambil info dari sana
+            if (detailError.response?.status === 404) {
+                const searchResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/search', {
+                    method: 'POST',
+                    data: { keyword: id, page: 1, perPage: 1, subjectType: 0 }
+                });
+                const item = searchResponse.data?.data?.items?.[0];
+                if (item) {
+                     infoResponse = await makeApiRequest('/wefeed-h5-bff/web/subject/detail', { params: { subjectId: item.id } });
+                } else {
+                    throw new Error("Video not found via search fallback");
+                }
+            } else {
+                throw detailError;
+            }
+        }
 
-        if (!subject) throw new Error("Video not found");
+        const subject = infoResponse.data?.data?.subject;
+        if (!subject) throw new Error("Subject data not found in response");
         
         const isSeries = subject.subjectType === 2;
         let activeSeason = isNaN(season) ? 0 : season;
@@ -102,23 +145,23 @@ exports.getVideoDetail = async (req, res) => {
                 });
                 const downloads = sourceResponse.data?.data?.downloads || [];
                 sources = downloads.map(file => ({
-                    quality: file.resolution || 'Original',
+                    quality: file.resolution ? `${file.resolution}p` : 'SD',
                     videoUrl: `${req.protocol}://${req.get('host')}/api/download/${encodeURIComponent(file.url)}`,
                     size: file.size ? `${(file.size / 1024 / 1024).toFixed(0)} MB` : ''
                 }));
             } catch (err) {
-                console.error("Source Fetch Error:", err.message);
+                console.error("Source Fetch Error for ID", id, ":", err.message);
             }
         }
         
         const movieData = {
             videoId: subject.id,
             title: subject.title,
-            description: subject.intro || 'No description available.',
+            description: subject.description || 'No description available.',
             cover: subject.cover?.url || subject.stills?.url,
             videoUrl: sources.length > 0 ? sources.sort((a, b) => parseInt(b.quality) - parseInt(a.quality))[0].videoUrl : null,
             sources: sources,
-            views: subject.viewCount ? `${(subject.viewCount / 1000).toFixed(1)}K` : '0',
+            views: subject.imdbRatingCount ? `${(subject.imdbRatingCount / 1000).toFixed(1)}K` : '0',
             duration: subject.duration ? `${Math.floor(subject.duration / 60)} min` : '',
             tags: subject.tagList?.map(t => t.name) || [],
             author: { name: "Wanzofc Film", avatar: "https://i.ibb.co/27ymgy5Z/abmoviev1.jpg" },
@@ -128,12 +171,12 @@ exports.getVideoDetail = async (req, res) => {
             activeEpisode: activeEpisode,
         };
 
-        const related = infoResponse.data?.data?.recommendList?.map(formatMovieItem) || [];
+        const related = infoResponse.data?.data?.recommendList?.map(formatMovieItem).filter(Boolean) || [];
         res.json({ success: true, data: movieData, related });
 
     } catch (error) {
-        console.error('Detail Error:', error);
-        res.status(500).json({ success: false, error: error.message });
+        console.error('Detail Critical Error:', error.message);
+        res.status(500).json({ success: false, error: "Gagal mengambil detail film." });
     }
 };
 
@@ -152,20 +195,13 @@ exports.proxyDownload = async (req, res) => {
                 'Range': req.headers.range
             }
         });
-
         const head = {
             'Content-Type': response.headers['content-type'],
             'Content-Length': response.headers['content-length'],
             'Accept-Ranges': 'bytes'
         };
         
-        if (response.status === 206) {
-            head['Content-Range'] = response.headers['content-range'];
-            res.writeHead(206, head);
-        } else {
-            res.writeHead(200, head);
-        }
-
+        res.writeHead(response.status, head);
         response.data.pipe(res);
     } catch (error) {
         if (!res.headersSent) res.status(500).send("Stream Error");
