@@ -2,104 +2,65 @@
 import { ref, onMounted } from 'vue';
 import DashboardLayout from '../layouts/DashboardLayout.vue';
 import Swal from 'sweetalert2';
+// Jika menggunakan Bootstrap Bundle dari Main.js, modal instance bisa diakses via window.bootstrap atau import
 import { Modal } from 'bootstrap';
-import io from 'socket.io-client';
-import axios from 'axios';
 
-const BACKEND_URL = 'https://solif.vercel.app';
-const socket = io(BACKEND_URL);
-
-const user = ref({ isPremium: false, serverSlots: 0, maxSessions: 2 });
-const projects = ref([]);
-const sessions = ref([]);
-const pairingNumber = ref('');
-const newProject = ref({ name: '', description: '' });
-const currentSession = ref({});
-
-onMounted(() => {
-    fetchData();
-    setupSocketListeners();
+// --- DATA MOCKUP (Ganti dengan fetch API backend nanti) ---
+const user = ref({
+    isPremium: false,
+    serverSlots: 2,
+    maxSessions: 2
 });
 
-const fetchData = async () => {
-    try {
-        const resProfile = await axios.get(`${BACKEND_URL}/api/profile`);
-        if(resProfile.data.success) user.value = resProfile.data.data;
-        
-        const resSessions = await axios.get(`${BACKEND_URL}/api/sessions`);
-        if(resSessions.data.success) sessions.value = resSessions.data.data;
-    } catch (e) {
-        console.error(e);
-    }
+const projects = ref([]); // Data Server Cloud
+const sessions = ref([
+    { sessionId: 'session_01', phoneNumber: '6289512345678', status: 'connected', customCode: '', config: { botname: 'FionaBot', owner: '628XX', jedaPushkontak: 5000, telegram: '' } }
+]); // Data WA Session
+
+// --- STATE MANAGEMENT ---
+const currentSession = ref({});
+const pairingNumber = ref('');
+const newProject = ref({ name: '', description: '' });
+
+// --- MODAL HANDLERS ---
+// Fungsi untuk membuka Config Modal dengan data sesi tertentu
+const openConfigModal = (session) => {
+    currentSession.value = { ...session }; // Clone object
+    const modal = new Modal(document.getElementById('configModal'));
+    modal.show();
 };
 
-const setupSocketListeners = () => {
-    socket.on('pairing-code', (data) => {
-        if(Swal.isVisible()) Swal.close();
-        
-        const modalEl = document.getElementById('addBotModal');
-        if(modalEl) {
-            const modal = Modal.getInstance(modalEl);
-            if(modal) modal.hide();
-        }
-
-        Swal.fire({
-            title: 'PAIRING CODE',
-            html: `
-                <div class="bg-light p-4 rounded-3 mb-3 border">
-                    <h1 class="text-success fw-bold display-4 m-0" style="letter-spacing: 5px;">${data.code}</h1>
-                </div>
-                <p class="mb-0">Buka WhatsApp > Perangkat Tertaut > Tautkan Perangkat</p>
-                <p class="text-muted small mt-2">Untuk: ${data.phoneNumber}</p>
-            `,
-            confirmButtonText: 'Selesai',
-            allowOutsideClick: false
-        }).then(() => {
-            fetchData();
-        });
-    });
-
-    socket.on('connection-status', (data) => {
-        const idx = sessions.value.findIndex(s => s.sessionId === data.sessionId);
-        if(idx !== -1) {
-            sessions.value[idx].status = data.status;
-        } else if(data.status === 'open' || data.status === 'connected') {
-            fetchData();
-        }
-    });
-
-    socket.on('session-deleted', (data) => {
-         sessions.value = sessions.value.filter(s => s.sessionId !== data.sessionId);
-    });
+const openCodeModal = (session) => {
+    currentSession.value = { ...session };
+    const modal = new Modal(document.getElementById('codeModal'));
+    modal.show();
 };
 
+// --- ACTIONS ---
 const requestPairing = () => {
-    if(!pairingNumber.value) return Swal.fire('Error', 'Masukkan Nomor WhatsApp (628...)', 'warning');
+    if(!pairingNumber.value) return Swal.fire('Error', 'Enter Number', 'error');
     
-    socket.emit('create-session', { phoneNumber: pairingNumber.value });
+    // Simulasi Socket Emit
+    Swal.fire({ title: 'Processing', didOpen: () => Swal.showLoading() });
     
-    Swal.fire({
-        title: 'Menghubungkan...',
-        text: 'Sedang meminta kode pairing dari server...',
-        allowOutsideClick: false,
-        didOpen: () => Swal.showLoading()
-    });
-};
-
-const deleteSession = (sessionId) => {
-    Swal.fire({
-        title: 'Hapus Sesi?',
-        text: "Bot akan berhenti beroperasi.",
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonColor: '#d33',
-        confirmButtonText: 'Ya, Hapus'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            socket.emit('delete-session', { sessionId });
-            Swal.fire('Terhapus!', 'Sesi bot telah dihapus.', 'success');
-        }
-    });
+    setTimeout(() => {
+        // Simulasi berhasil dapat kode
+        Swal.fire({ 
+            title: 'PAIRING CODE', 
+            html: `<div class="bg-light p-3 rounded mb-2"><h1 class="text-success fw-bold display-2 m-0">ABC-123</h1></div><p>Enter on WhatsApp Linked Device</p>` 
+        });
+        // Reset modal
+        const modalEl = document.getElementById('addBotModal');
+        const modal = Modal.getInstance(modalEl);
+        modal.hide();
+        
+        // Simulasi tambah sesi
+        sessions.value.push({ 
+            sessionId: 'new_sess_' + Date.now(), 
+            phoneNumber: pairingNumber.value, 
+            status: 'connecting' 
+        });
+    }, 1500);
 };
 
 const createProject = () => {
@@ -114,26 +75,39 @@ const createProject = () => {
     Swal.fire('Success', 'Server Deployed!', 'success');
 };
 
-const openConfigModal = (session) => {
-    currentSession.value = { ...session };
-    if(!currentSession.value.config) currentSession.value.config = {};
-    const modal = new Modal(document.getElementById('configModal'));
-    modal.show();
+const deleteSession = (id) => {
+    Swal.fire({ title: 'Delete?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: 'Yes' }).then((res) => {
+        if(res.isConfirmed) { 
+            sessions.value = sessions.value.filter(s => s.sessionId !== id);
+            Swal.fire('Deleted!', 'Session removed.', 'success');
+        }
+    });
 };
 
-const openCodeModal = (session) => {
-    currentSession.value = { ...session };
-    const modal = new Modal(document.getElementById('codeModal'));
-    modal.show();
+const deleteProject = (uuid) => {
+    Swal.fire({ title: 'Delete Server?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: 'Destroy' }).then((res) => {
+        if(res.isConfirmed) { 
+            projects.value = projects.value.filter(p => p.uuid !== uuid);
+            Swal.fire('Destroyed!', 'Server container removed.', 'success');
+        }
+    });
 };
 
 const saveConfig = () => {
+    // Update data di array sessions (Simulasi Save ke DB)
+    const index = sessions.value.findIndex(s => s.sessionId === currentSession.value.sessionId);
+    if(index !== -1) sessions.value[index] = { ...currentSession.value };
+    
     const modal = Modal.getInstance(document.getElementById('configModal'));
     modal.hide();
     Swal.fire('Saved', 'Configuration updated.', 'success');
 };
 
 const saveCode = () => {
+    // Update code
+    const index = sessions.value.findIndex(s => s.sessionId === currentSession.value.sessionId);
+    if(index !== -1) sessions.value[index].customCode = currentSession.value.customCode;
+
     const modal = Modal.getInstance(document.getElementById('codeModal'));
     modal.hide();
     Swal.fire('Saved', 'Custom injector updated.', 'success');
@@ -142,6 +116,7 @@ const saveCode = () => {
 
 <template>
     <DashboardLayout>
+        <!-- Premium Banner -->
         <div v-if="!user.isPremium" class="card border-0 bg-primary bg-gradient text-white shadow-sm rounded-4 mb-5">
             <div class="card-body p-4 d-flex flex-column flex-md-row justify-content-between align-items-center">
                 <div class="mb-3 mb-md-0">
@@ -152,6 +127,7 @@ const saveCode = () => {
             </div>
         </div>
 
+        <!-- PROJECT SECTION -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h4 class="fw-bold text-dark m-0"><i class="fas fa-server me-2"></i>Cloud Servers</h4>
@@ -198,6 +174,7 @@ const saveCode = () => {
 
         <hr class="my-5 border-light">
 
+        <!-- WHATSAPP BOT SECTION -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h4 class="fw-bold text-dark m-0"><i class="fab fa-whatsapp me-2"></i>Bot Sessions</h4>
@@ -214,33 +191,27 @@ const saveCode = () => {
         <div class="row g-4">
             <div v-if="sessions.length === 0" class="col-12 text-center py-5 bg-white rounded-4 shadow-sm">
                 <i class="fab fa-whatsapp fa-3x text-muted mb-3 opacity-25"></i>
-                <h5 class="fw-bold text-muted">Belum ada bot terhubung</h5>
-                <p class="text-muted small">Klik tombol "Connect WA" untuk memulai.</p>
+                <h5 class="fw-bold text-muted">No WhatsApp connected</h5>
             </div>
             
             <div v-for="sess in sessions" :key="sess.sessionId" class="col-md-6 col-xl-4">
                 <div class="card card-session h-100">
                     <div class="card-body p-4">
                         <div class="d-flex align-items-center mb-4">
-                            <div class="bg-light p-3 rounded-circle me-3 text-success shadow-sm">
-                                <i class="fab fa-whatsapp fa-2x"></i>
-                            </div>
+                            <div class="bg-light p-3 rounded-circle me-3 text-success shadow-sm"><i class="fab fa-whatsapp fa-2x"></i></div>
                             <div>
-                                <h6 class="fw-bold mb-0 text-dark">{{ sess.phoneNumber }}</h6>
-                                <span class="badge mt-1 border" 
-                                    :class="sess.status === 'connected' || sess.status === 'open' ? 'bg-success bg-opacity-10 text-success border-success' : 'bg-warning bg-opacity-10 text-warning border-warning'">
-                                    <i class="fas fa-circle me-1 small"></i> {{ sess.status }}
+                                <h6 class="fw-bold mb-0 text-dark">{{ sess.phoneNumber || 'Connecting...' }}</h6>
+                                <span class="badge bg-light text-dark border mt-1">
+                                    <span class="status-indicator" :class="sess.status == 'connected' ? 'status-connected' : 'status-connecting'"></span> {{ sess.status }}
                                 </span>
                             </div>
                         </div>
                         <div class="d-flex justify-content-between align-items-center pt-3 border-top">
-                            <small class="text-muted fw-bold font-monospace">{{ sess.sessionId.substring(0,8) }}</small>
+                            <small class="text-muted fw-bold">{{ sess.sessionId.substring(0,6) }}...</small>
                             <div class="d-flex">
                                 <button class="btn btn-action btn-code shadow-sm" @click="openCodeModal(sess)"><i class="fas fa-code"></i></button>
                                 <button class="btn btn-action btn-settings shadow-sm" @click="openConfigModal(sess)"><i class="fas fa-cog"></i></button>
-                                <button class="btn btn-action btn-delete shadow-sm" @click="deleteSession(sess.sessionId)">
-                                    <i class="fas fa-trash-alt"></i>
-                                </button>
+                                <button class="btn btn-action btn-delete shadow-sm" @click="deleteSession(sess.sessionId)"><i class="fas fa-trash-alt"></i></button>
                             </div>
                         </div>
                     </div>
@@ -248,24 +219,23 @@ const saveCode = () => {
             </div>
         </div>
 
+        <!-- MODAL: ADD BOT -->
         <div class="modal fade" id="addBotModal" tabindex="-1" data-bs-backdrop="static">
             <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content border-0 shadow-lg rounded-4">
                     <div class="modal-header border-0">
-                        <h5 class="fw-bold">Tautkan Perangkat Baru</h5>
+                        <h5>New Connection</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body p-4 text-center">
-                        <p class="text-muted small mb-3">Masukkan nomor WhatsApp diawali kode negara (cth: 628...)</p>
-                        <input v-model="pairingNumber" type="number" class="form-control form-control-lg text-center fw-bold mb-3 rounded-pill bg-light border-0" placeholder="62895..." autofocus>
-                        <button class="btn btn-success w-100 btn-lg rounded-pill fw-bold shadow-sm" @click="requestPairing">
-                            Dapatkan Kode Pairing <i class="fas fa-arrow-right ms-2"></i>
-                        </button>
+                        <input v-model="pairingNumber" type="number" class="form-control form-control-lg text-center fw-bold mb-3 rounded-pill" placeholder="628xxx">
+                        <button class="btn btn-success w-100 btn-lg rounded-pill fw-bold" @click="requestPairing">Get Pairing Code</button>
                     </div>
                 </div>
             </div>
         </div>
 
+        <!-- MODAL: CREATE PROJECT -->
         <div class="modal fade" id="createProjectModal" tabindex="-1">
             <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content border-0 shadow-lg rounded-4">
@@ -292,6 +262,7 @@ const saveCode = () => {
             </div>
         </div>
 
+        <!-- MODAL: CONFIG (Dynamic) -->
         <div class="modal fade" id="configModal" tabindex="-1">
             <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content border-0 shadow rounded-4">
@@ -316,6 +287,7 @@ const saveCode = () => {
             </div>
         </div>
 
+        <!-- MODAL: CODE (Dynamic) -->
         <div class="modal fade" id="codeModal" tabindex="-1">
             <div class="modal-dialog modal-dialog-centered modal-lg">
                 <div class="modal-content border-0 shadow-lg rounded-4">
@@ -338,9 +310,12 @@ const saveCode = () => {
 </template>
 
 <style scoped>
+/* Specific Card Styles */
 .card-session { border: none; border-radius: 16px; background: white; box-shadow: 0 5px 20px rgba(0,0,0,0.03); transition: transform 0.2s; position: relative; overflow: hidden; }
 .card-session:hover { transform: translateY(-5px); box-shadow: 0 15px 30px rgba(0,0,0,0.08); }
 .status-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.status-connected { background-color: #198754; box-shadow: 0 0 10px rgba(25, 135, 84, 0.5); }
+.status-connecting { background-color: #ffc107; box-shadow: 0 0 10px rgba(255, 193, 7, 0.5); }
 .btn-action { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 10px; border: none; transition: 0.2s; margin-left: 5px; }
 .btn-settings { background: #f1f3f5; color: #495057; }
 .btn-settings:hover { background: var(--primary-color); color: white; }
@@ -350,6 +325,7 @@ const saveCode = () => {
 .btn-delete:hover { background: #dc3545; color: white; }
 .code-editor { background-color: var(--code-bg); color: #d4d4d4; font-family: 'Consolas', 'Monaco', monospace; font-size: 14px; border: 1px solid #333; border-radius: 8px; padding: 15px; width: 100%; height: 300px; resize: vertical; line-height: 1.5; }
 .code-editor:focus { outline: 2px solid var(--primary-color); border-color: transparent; }
+
 .card-server { border: none; border-radius: 12px; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.05); transition: 0.2s; }
 .card-server:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); border: 1px solid var(--primary-color); }
 .server-icon { width: 50px; height: 50px; border-radius: 12px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; color: var(--primary-color); font-size: 24px; }
