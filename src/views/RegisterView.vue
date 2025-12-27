@@ -1,11 +1,13 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AOS from 'aos';
 
 const route = useRoute();
 const router = useRouter();
-const sessionId = route.params.id || '';
+
+// Menggunakan computed agar reaktif
+const sessionId = computed(() => route.params.id || '');
 
 const form = ref({
     username: '',
@@ -17,10 +19,23 @@ const showPassword = ref(false);
 
 const handleRegister = () => {
     if(form.value.username && form.value.phone && form.value.password) {
-        // Simulasi register berhasil
-        router.push('/login');
+        // Logika setelah register sukses, arahkan ke login
+        if (sessionId.value) {
+            router.push(`/login/${sessionId.value}`);
+        } else {
+            router.push('/login');
+        }
     } else {
         alert('Mohon lengkapi semua data!');
+    }
+};
+
+// Fungsi navigasi ke Login membawa ID
+const goToLogin = () => {
+    if (sessionId.value) {
+        router.push(`/login/${sessionId.value}`);
+    } else {
+        router.push('/login');
     }
 };
 
@@ -39,6 +54,7 @@ onMounted(() => {
                         <div class="text-center mb-4">
                             <h4 class="fw-bold text-uppercase">buat akun baru</h4>
                             <p class="text-muted small lowercase-text">mulai perjalanan bot anda</p>
+                            
                              <div v-if="sessionId" class="badge bg-success bg-opacity-10 text-success py-2 px-3 rounded-pill mb-2">
                                 <i class="fas fa-check-circle me-1"></i>Refferal: {{ sessionId }}
                             </div>
@@ -86,7 +102,7 @@ onMounted(() => {
 
                         <div class="text-center small">
                             <span class="text-muted">Sudah punya akun?</span>
-                            <a href="#" @click.prevent="router.push('/login/' + sessionId)" class="text-primary fw-bold text-decoration-none ms-1">Masuk</a>
+                            <a href="#" @click.prevent="goToLogin" class="text-primary fw-bold text-decoration-none ms-1">Masuk</a>
                         </div>
                     </div>
                 </div>
