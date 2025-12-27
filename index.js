@@ -8,12 +8,13 @@ const qrcode = require('qrcode');
 
 const app = express();
 
-// Konfigurasi Limit Payload (Fix Error 413)
+// 1. LIMIT BODY PARSER (Mencegah Error 413)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+// 2. CORS (Izinkan Authorization Header untuk Fix 401)
 app.use(cors({
-  origin: '*', 
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Title', 'HTTP-Referer']
 }));
@@ -22,8 +23,8 @@ const MONGO_URI = "mongodb+srv://maverickuniverse405:1m8MIgmKfK2QwBNe@cluster0.i
 const JWT_SECRET = 'wanzofc_super_secret_key_2025';
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('MongoDB Connected'))
-  .catch(err => console.error('MongoDB Error:', err));
+  .then(() => console.log('✅ MongoDB Connected'))
+  .catch(err => console.error('❌ MongoDB Error:', err));
 
 // --- SCHEMAS ---
 const UserSchema = new mongoose.Schema({
@@ -48,27 +49,32 @@ const ChatSchema = new mongoose.Schema({
 const User = mongoose.model('User', UserSchema);
 const Chat = mongoose.model('Chat', ChatSchema);
 
-// --- MIDDLEWARE AUTH (SOLUSI ERROR 401) ---
+// --- MIDDLEWARE AUTH (FIX ERROR 401) ---
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Format: Bearer <token>
+  // Format harus: "Bearer <token>"
+  const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) return res.status(401).json({ error: 'Access denied. No token provided.' });
+  if (!token) {
+    console.log("❌ Auth Failed: No Token Provided");
+    return res.status(401).json({ error: 'Access denied. No token.' });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded; // Simpan data user di request
+    req.user = decoded; // { id: '...' }
     next();
   } catch (err) {
+    console.log("❌ Auth Failed: Invalid Token");
     return res.status(401).json({ error: 'Invalid token.' });
   }
 };
 
 // --- ROUTES ---
 
-app.get('/api', (req, res) => res.json({ status: 'OK' }));
+app.get('/api', (req, res) => res.json({ status: 'Server Running' }));
 
-// 1. REGISTER
+// AUTH: REGISTER
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password, username } = req.body;
@@ -84,7 +90,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// 2. LOGIN
+// AUTH: LOGIN
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -111,14 +117,20 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// 3. SETUP 2FA (Fix Error 400/500)
+// AUTH: SETUP 2FA (FIX ERROR 400)
 app.post('/api/auth/setup-2fa', async (req, res) => {
-  const { userId } = req.body; // Pastikan frontend mengirim { userId: '...' }
-  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  const { userId } = req.body;
+  
+  // Debug Log
+  console.log("2FA Setup Request Body:", req.body);
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is missing in request body' });
+  }
 
   try {
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user) return res.status(404).json({ error: 'User not found in DB' });
 
     const secret = authenticator.generateSecret();
     user.twoFactorSecret = secret;
@@ -129,38 +141,36 @@ app.post('/api/auth/setup-2fa', async (req, res) => {
 
     res.json({ qrCode: imageUrl, secret: secret });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Setup 2FA failed' });
+    console.error("2FA Error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// 4. VERIFY 2FA SETUP
+// AUTH: VERIFY 2FA SETUP
 app.post('/api/auth/verify-2fa-setup', async (req, res) => {
   const { userId, code } = req.body;
   try {
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
     const isValid = authenticator.check(code, user.twoFactorSecret);
     if (!isValid) return res.status(400).json({ error: 'Invalid Code' });
 
     user.is2FAEnabled = true;
     await user.save();
     
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' }); // Auto login setelah setup
-    res.json({ success: true, token, user });
+    // Kirim token baru supaya user langsung login
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ success: true, token, user: { ...user._doc, is2FAEnabled: true } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 5. VERIFY 2FA LOGIN
+// AUTH: VERIFY 2FA LOGIN
 app.post('/api/auth/verify-2fa', async (req, res) => {
   const { userId, code } = req.body;
   try {
     const user = await User.findById(userId);
     const isValid = authenticator.check(code, user.twoFactorSecret);
-    
     if (!isValid) return res.status(400).json({ error: 'Invalid Code' });
     
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
@@ -176,7 +186,7 @@ app.post('/api/auth/verify-2fa', async (req, res) => {
   }
 });
 
-// 6. UPDATE PROFILE (Menggunakan Middleware)
+// USER: PROFILE (Pakai Middleware)
 app.put('/api/user/profile', authenticateToken, async (req, res) => {
   const { email, password, avatar, username, is2FAEnabled } = req.body;
   try {
@@ -186,13 +196,16 @@ app.put('/api/user/profile', authenticateToken, async (req, res) => {
     if (password) updateData.password = await bcrypt.hash(password, 10);
 
     const user = await User.findByIdAndUpdate(req.user.id, updateData, { new: true });
-    res.json(user);
+    res.json({
+      id: user._id, email: user.email, username: user.username,
+      tier: user.tier, avatar: user.avatar, is2FAEnabled: user.is2FAEnabled
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 7. GET CHATS (Menggunakan Middleware)
+// CHATS: GET (Pakai Middleware)
 app.get('/api/chats', authenticateToken, async (req, res) => {
   try {
     const chats = await Chat.find({ userId: req.user.id }).sort({ updatedAt: -1 });
@@ -202,20 +215,19 @@ app.get('/api/chats', authenticateToken, async (req, res) => {
   }
 });
 
-// 8. SAVE CHAT (Menggunakan Middleware)
+// CHATS: SAVE (Pakai Middleware)
 app.post('/api/chats', authenticateToken, async (req, res) => {
   const { id, title, model, messages } = req.body;
   try {
     let chat;
     if (id && mongoose.Types.ObjectId.isValid(id)) {
       chat = await Chat.findOneAndUpdate(
-        { _id: id, userId: req.user.id }, // Security: Pastikan punya user sendiri
+        { _id: id, userId: req.user.id },
         { messages, updatedAt: Date.now() }, 
         { new: true }
       );
     } 
     
-    // Jika ID tidak ada atau chat lama tidak ketemu (misal dihapus), buat baru
     if (!chat) {
       chat = new Chat({ userId: req.user.id, title: title || 'New Chat', model, messages });
       await chat.save();
@@ -227,7 +239,7 @@ app.post('/api/chats', authenticateToken, async (req, res) => {
   }
 });
 
-// 9. DELETE CHAT
+// CHATS: DELETE
 app.delete('/api/chats/:id', authenticateToken, async (req, res) => {
   try {
     await Chat.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
