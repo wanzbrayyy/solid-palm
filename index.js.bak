@@ -175,22 +175,29 @@ app.put('/api/user/profile', authenticateToken, async (req, res) => {
 
 app.get('/api/chats', authenticateToken, async (req, res) => {
   await connectDB();
-  try {
-    const chats = await Chat.find({ userId: req.user.id }).sort({ updatedAt: -1 });
-    res.json(chats);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  const chats = await Chat.find({ userId: req.user.id }).sort({ updatedAt: -1 });
+  res.json(chats);
 });
 
 app.post('/api/chats', authenticateToken, async (req, res) => {
   await connectDB();
+  const { id, title, model, messages, isPublic, permissionLevel } = req.body;
   try {
-    const { id, title, model, messages } = req.body;
     let chat;
+    const chatData = {
+      userId: req.user.id,
+      title: title || messages[0]?.text.substring(0, 30) || 'New Chat',
+      model,
+      messages,
+      isPublic,
+      permissionLevel,
+      updatedAt: Date.now()
+    };
+
     if (id && mongoose.Types.ObjectId.isValid(id)) {
-      chat = await Chat.findOneAndUpdate({ _id: id, userId: req.user.id }, { messages, updatedAt: Date.now() }, { new: true });
-    }
-    if (!chat) {
-      chat = new Chat({ userId: req.user.id, title: title || 'New Chat', model, messages });
+      chat = await Chat.findOneAndUpdate({ _id: id, userId: req.user.id }, chatData, { new: true });
+    } else {
+      chat = new Chat(chatData);
       await chat.save();
     }
     res.json(chat);
@@ -203,6 +210,24 @@ app.delete('/api/chats/:id', authenticateToken, async (req, res) => {
     await Chat.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/public/chat/:id', async (req, res) => {
+  await connectDB();
+  try {
+    const chat = await Chat.findById(req.params.id);
+    if (!chat || !chat.isPublic) {
+      return res.status(404).json({ error: 'Chat not found or is private' });
+    }
+    // Hanya kirim data yang relevan
+    res.json({
+      title: chat.title,
+      messages: chat.messages,
+      model: chat.model,
+      updatedAt: chat.updatedAt
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Invalid chat ID' });
+  }
 });
 
 module.exports = app;
