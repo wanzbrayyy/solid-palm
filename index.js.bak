@@ -8,17 +8,19 @@ const qrcode = require('qrcode');
 
 const app = express();
 
-// 1. LIMIT BODY PARSER (Mencegah Error 413)
+// --- 1. KONFIGURASI SERVER ---
+// Naikkan limit agar upload foto profile aman (Fix Error 413 Payload Too Large)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// 2. CORS (Izinkan Authorization Header untuk Fix 401)
+// Konfigurasi CORS agar Frontend bisa akses Backend beda domain
 app.use(cors({
-  origin: '*',
+  origin: '*', // Di production sebaiknya ganti dengan URL Frontend Anda
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Title', 'HTTP-Referer']
 }));
 
+// --- 2. DATABASE ---
 const MONGO_URI = "mongodb+srv://maverickuniverse405:1m8MIgmKfK2QwBNe@cluster0.il8d4jx.mongodb.net/wanz_db?appName=Cluster0";
 const JWT_SECRET = 'wanzofc_super_secret_key_2025';
 
@@ -26,7 +28,7 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log('✅ MongoDB Connected'))
   .catch(err => console.error('❌ MongoDB Error:', err));
 
-// --- SCHEMAS ---
+// --- 3. SCHEMAS ---
 const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -49,32 +51,35 @@ const ChatSchema = new mongoose.Schema({
 const User = mongoose.model('User', UserSchema);
 const Chat = mongoose.model('Chat', ChatSchema);
 
-// --- MIDDLEWARE AUTH (FIX ERROR 401) ---
+// --- 4. MIDDLEWARE AUTH ---
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  // Format harus: "Bearer <token>"
   const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) {
-    console.log("❌ Auth Failed: No Token Provided");
-    return res.status(401).json({ error: 'Access denied. No token.' });
-  }
+  if (!token) return res.status(401).json({ error: 'Access denied. No token.' });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded; // { id: '...' }
+    req.user = decoded;
     next();
   } catch (err) {
-    console.log("❌ Auth Failed: Invalid Token");
     return res.status(401).json({ error: 'Invalid token.' });
   }
 };
 
-// --- ROUTES ---
+// --- 5. ROUTES ---
 
-app.get('/api', (req, res) => res.json({ status: 'Server Running' }));
+// Route Root (Fix: Cannot GET /)
+app.get('/', (req, res) => {
+  res.send('<h1>✅ Wanzofc API is Running</h1><p>Ready to serve requests.</p>');
+});
 
-// AUTH: REGISTER
+// Route Health Check
+app.get('/api', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date() });
+});
+
+// --- AUTHENTICATION ---
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password, username } = req.body;
@@ -90,7 +95,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// AUTH: LOGIN
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -117,20 +121,14 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// AUTH: SETUP 2FA (FIX ERROR 400)
+// --- 2FA LOGIC ---
 app.post('/api/auth/setup-2fa', async (req, res) => {
   const { userId } = req.body;
-  
-  // Debug Log
-  console.log("2FA Setup Request Body:", req.body);
-
-  if (!userId) {
-    return res.status(400).json({ error: 'User ID is missing in request body' });
-  }
+  if (!userId) return res.status(400).json({ error: 'User ID missing' });
 
   try {
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ error: 'User not found in DB' });
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
     const secret = authenticator.generateSecret();
     user.twoFactorSecret = secret;
@@ -141,12 +139,11 @@ app.post('/api/auth/setup-2fa', async (req, res) => {
 
     res.json({ qrCode: imageUrl, secret: secret });
   } catch (err) {
-    console.error("2FA Error:", err);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error("2FA Setup Error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// AUTH: VERIFY 2FA SETUP
 app.post('/api/auth/verify-2fa-setup', async (req, res) => {
   const { userId, code } = req.body;
   try {
@@ -157,15 +154,13 @@ app.post('/api/auth/verify-2fa-setup', async (req, res) => {
     user.is2FAEnabled = true;
     await user.save();
     
-    // Kirim token baru supaya user langsung login
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ success: true, token, user: { ...user._doc, is2FAEnabled: true } });
+    res.json({ success: true, token, user });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// AUTH: VERIFY 2FA LOGIN
 app.post('/api/auth/verify-2fa', async (req, res) => {
   const { userId, code } = req.body;
   try {
@@ -186,7 +181,7 @@ app.post('/api/auth/verify-2fa', async (req, res) => {
   }
 });
 
-// USER: PROFILE (Pakai Middleware)
+// --- USER & CHAT CRUD ---
 app.put('/api/user/profile', authenticateToken, async (req, res) => {
   const { email, password, avatar, username, is2FAEnabled } = req.body;
   try {
@@ -196,26 +191,19 @@ app.put('/api/user/profile', authenticateToken, async (req, res) => {
     if (password) updateData.password = await bcrypt.hash(password, 10);
 
     const user = await User.findByIdAndUpdate(req.user.id, updateData, { new: true });
-    res.json({
-      id: user._id, email: user.email, username: user.username,
-      tier: user.tier, avatar: user.avatar, is2FAEnabled: user.is2FAEnabled
-    });
+    res.json(user);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// CHATS: GET (Pakai Middleware)
 app.get('/api/chats', authenticateToken, async (req, res) => {
   try {
     const chats = await Chat.find({ userId: req.user.id }).sort({ updatedAt: -1 });
     res.json(chats);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// CHATS: SAVE (Pakai Middleware)
 app.post('/api/chats', authenticateToken, async (req, res) => {
   const { id, title, model, messages } = req.body;
   try {
@@ -227,26 +215,23 @@ app.post('/api/chats', authenticateToken, async (req, res) => {
         { new: true }
       );
     } 
-    
     if (!chat) {
       chat = new Chat({ userId: req.user.id, title: title || 'New Chat', model, messages });
       await chat.save();
     }
     res.json(chat);
-  } catch (err) {
-    console.error("Save Chat Error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// CHATS: DELETE
 app.delete('/api/chats/:id', authenticateToken, async (req, res) => {
   try {
     await Chat.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// --- START SERVER ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 module.exports = app;
